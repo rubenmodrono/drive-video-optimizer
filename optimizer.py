@@ -29,8 +29,9 @@ UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 MARK = "dvo_optimized"          # appProperty puesta en los archivos ya optimizados
 
 # Ajustes de compresión
-TARGET_BITRATE = "10M"
-MAXRATE, BUFSIZE = "15M", "20M"
+# Escalera de bitrates (Mbps): se empieza por el más bajo y, si la calidad no
+# llega al mínimo, se vuelve a comprimir con el siguiente.
+BITRATES = [10, 14, 18]
 MAX_SHORT_SIDE = 1080
 # Reglas de verificación
 MIN_SAVINGS = 0.20          # ahorro mínimo para sustituir
@@ -155,7 +156,7 @@ def has_vmaf():
     return "libvmaf" in run(["ffmpeg", "-hide_banner", "-filters"])
 
 
-def encode(src, dst, vi, workdir):
+def encode(src, dst, vi, workdir, mbps):
     short = min(vi["w"], vi["h"])
     scale = (f"scale={'-2' if vi['w'] > vi['h'] else MAX_SHORT_SIDE}:"
              f"{MAX_SHORT_SIDE if vi['w'] > vi['h'] else '-2'}:flags=lanczos"
@@ -174,8 +175,8 @@ def encode(src, dst, vi, workdir):
         color = ["-color_primaries", "bt2020", "-color_trc", vi["trc"], "-colorspace", "bt2020nc"]
     stats = os.path.join(workdir, "x265.log")
     common = ["-map", "0:v:0", "-fps_mode", "passthrough", "-vf", f"{scale},format={pix}",
-              "-c:v", "libx265", "-preset", "medium", "-b:v", TARGET_BITRATE,
-              "-maxrate", MAXRATE, "-bufsize", BUFSIZE, "-tag:v", "hvc1"]
+              "-c:v", "libx265", "-preset", "medium", "-b:v", f"{mbps}M",
+              "-maxrate", f"{mbps * 1.5:g}M", "-bufsize", f"{mbps * 2}M", "-tag:v", "hvc1"]
     run(["ffmpeg", "-hide_banner", "-y", "-i", src, *common,
          "-x265-params", f"{xp}:pass=1:stats={stats}", "-an", "-f", "null", "-"])
     run(["ffmpeg", "-hide_banner", "-y", "-i", src, *common,
@@ -250,9 +251,15 @@ def process(drive, f, args, workdir):
     if min(vi["w"], vi["h"]) <= MAX_SHORT_SIDE and vi["bitrate"] / 1e6 <= SKIP_BELOW_MBPS:
         return dict(name=name, status="omitido", reason="ya es ligero")
     t0 = time.time()
-    encode(src, dst, vi, workdir)
-    res = verify(src, dst, vi, size)
-    res.update(name=name, original=size, seconds=round(time.time() - t0))
+    tried = []
+    for mbps in BITRATES:
+        encode(src, dst, vi, workdir, mbps)
+        res = verify(src, dst, vi, size)
+        tried.append(f"{mbps}M: {res['metric']} {res['scores']}")
+        quality_only = all(p.startswith(res["metric"]) for p in res["problems"])
+        if res["ok"] or not quality_only:
+            break  # aprobado, o falla por algo que más bitrate no arregla
+    res.update(name=name, original=size, seconds=round(time.time() - t0), intentos=tried)
     if not res["ok"]:
         res["status"] = "rechazado"
         return res
