@@ -307,8 +307,20 @@ def main():
     drive = Drive()
     if args.apply and not drive.can_write():
         sys.exit("El token solo tiene permiso de lectura: no se puede usar --apply.")
-    videos = [f for f in drive.list_videos()
-              if (f.get("appProperties") or {}).get(MARK) != "1"]
+    todos = drive.list_videos()
+    hechos = {os.path.splitext(f["name"])[0].lower() for f in todos
+              if (f.get("appProperties") or {}).get(MARK) == "1"}
+    videos = [f for f in todos if (f.get("appProperties") or {}).get(MARK) != "1"]
+    dup = [f["name"] for f in videos if os.path.splitext(f["name"])[0].lower() in hechos]
+    if dup:  # ya hay una versión optimizada con ese nombre: no duplicar
+        log("Ya optimizados (se dejan como están): " + ", ".join(dup))
+    videos = [f for f in videos if os.path.splitext(f["name"])[0].lower() not in hechos]
+    vistos, unicos = set(), []
+    for f in sorted(videos, key=lambda f: f.get("createdTime", "")):
+        if f["name"].lower() not in vistos:  # dos subidas del mismo archivo: solo una
+            vistos.add(f["name"].lower())
+            unicos.append(f)
+    videos = unicos
     if args.only:
         videos = [f for f in videos if f["name"] in args.only]
     if args.id:
