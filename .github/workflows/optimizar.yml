@@ -41,7 +41,9 @@ jobs:
         env:
           LIMITE: ${{ inputs.limite || '0' }}
         run: |
-          python3 optimizer.py --list-json videos.json --limit "$LIMITE"
+          FLAGS=""
+          if [ "$MODO" = "sustituir" ]; then FLAGS="--apply"; fi
+          python3 optimizer.py --list-json videos.json --limit "$LIMITE" $FLAGS
           echo "videos=$(cat videos.json)" >> "$GITHUB_OUTPUT"
           echo "total=$(python3 -c 'import json;print(len(json.load(open("videos.json"))))')" >> "$GITHUB_OUTPUT"
 
@@ -83,3 +85,37 @@ jobs:
           name: informe-${{ matrix.video.id }}
           path: informe.json
           if-no-files-found: ignore
+
+  avisar:
+    # Aviso al móvil con ntfy (https://ntfy.sh) si existe la variable NTFY_TOPIC
+    needs: [listar, optimizar]
+    if: always() && needs.listar.outputs.total != '0' && vars.NTFY_TOPIC != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: informe-*
+          path: informes
+      - name: Enviar aviso
+        env:
+          NTFY_TOPIC: ${{ vars.NTFY_TOPIC }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, urllib.request
+          rs = [r for p in glob.glob("informes/*/informe.json") for r in json.load(open(p))]
+          ok = [r for r in rs if r.get("status") == "sustituido"]
+          otros = [f"{r['name']} ({r.get('status')})" for r in rs if r.get("status") != "sustituido"]
+          gb = sum(r["original"] - r["size"] for r in ok) / 1e9
+          msg = f"{len(ok)} vídeos nuevos listos en Drive ({gb:.2f} GB liberados)."
+          if ok:
+              msg += "\nListos: " + ", ".join(os.path.splitext(r["name"])[0] + ".mp4" for r in ok)
+          if otros:
+              msg += "\nSin sustituir: " + ", ".join(otros)
+          req = urllib.request.Request("https://ntfy.sh/" + os.environ["NTFY_TOPIC"], data=msg.encode(),
+                                       headers={"Title": "Contenido nuevo para redes", "Click": os.environ["RUN_URL"],
+                                                "Tags": "movie_camera"})
+          urllib.request.urlopen(req)
+          print(msg)
+          PY

@@ -311,16 +311,36 @@ def main():
     hechos = {os.path.splitext(f["name"])[0].lower() for f in todos
               if (f.get("appProperties") or {}).get(MARK) == "1"}
     videos = [f for f in todos if (f.get("appProperties") or {}).get(MARK) != "1"]
-    dup = [f["name"] for f in videos if os.path.splitext(f["name"])[0].lower() in hechos]
-    if dup:  # ya hay una versión optimizada con ese nombre: no duplicar
-        log("Ya optimizados (se dejan como están): " + ", ".join(dup))
-    videos = [f for f in videos if os.path.splitext(f["name"])[0].lower() not in hechos]
-    vistos, unicos = set(), []
+    # Control de duplicados: un original que se vuelve a subir después de
+    # haberlo optimizado (mismo nombre y mismo tamaño que el original que se
+    # sustituyó) se borra en modo sustituir, y nunca se vuelve a procesar.
+    origen = {}
+    for f in todos:
+        ap_ = f.get("appProperties") or {}
+        if ap_.get(MARK) == "1":
+            origen.setdefault(os.path.splitext(f["name"])[0].lower(), set()).add(
+                ap_.get("dvo_source_size"))
+    sobran, vistos, unicos = [], {}, []
     for f in sorted(videos, key=lambda f: f.get("createdTime", "")):
-        if f["name"].lower() not in vistos:  # dos subidas del mismo archivo: solo una
-            vistos.add(f["name"].lower())
+        base = os.path.splitext(f["name"])[0].lower()
+        clave = (f["name"].lower(), f.get("size"))
+        if base in hechos:
+            if f.get("size") in origen.get(base, ()):
+                sobran.append(f)  # es el mismo original ya optimizado
+            else:
+                log(f"{f['name']}: ya hay un {base}.mp4 optimizado pero el tamaño no coincide; se deja como está")
+        elif clave in vistos:
+            sobran.append(f)      # dos subidas idénticas del mismo archivo
+        else:
+            vistos[clave] = f
             unicos.append(f)
     videos = unicos
+    for f in sobran if not args.id else []:  # solo lo hace el paso que lista
+        if args.apply:
+            drive.delete_forever(f["id"])
+            log(f"Duplicado borrado: {f['name']} ({int(f.get('size', 0))/1e6:.0f} MB)")
+        else:
+            log(f"Duplicado (se borraría en modo sustituir): {f['name']}")
     if args.only:
         videos = [f for f in videos if f["name"] in args.only]
     if args.id:
