@@ -1,5 +1,8 @@
 name: Optimizar vídeos de Drive
 
+# Un trabajo por vídeo: "listar" busca los vídeos pendientes y lanza un
+# trabajo independiente para cada uno, todos en paralelo.
+
 on:
   schedule:
     - cron: "0 2 * * *"   # cada noche a las 02:00 UTC
@@ -18,10 +21,41 @@ concurrency:
   group: optimizer
   cancel-in-progress: false
 
+env:
+  GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+  GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+  GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+  MODO: ${{ github.event_name == 'schedule' && vars.MODO_NOCTURNO || inputs.modo }}
+
 jobs:
-  optimizar:
+  listar:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 10
+    outputs:
+      videos: ${{ steps.lista.outputs.videos }}
+      total: ${{ steps.lista.outputs.total }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Buscar vídeos pendientes
+        id: lista
+        env:
+          LIMITE: ${{ inputs.limite || '0' }}
+        run: |
+          python3 optimizer.py --list-json videos.json --limit "$LIMITE"
+          echo "videos=$(cat videos.json)" >> "$GITHUB_OUTPUT"
+          echo "total=$(python3 -c 'import json;print(len(json.load(open("videos.json"))))')" >> "$GITHUB_OUTPUT"
+
+  optimizar:
+    needs: listar
+    if: needs.listar.outputs.total != '0'
+    name: ${{ matrix.video.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false        # si un vídeo falla, los demás siguen
+      max-parallel: 20        # máximo de trabajos simultáneos en el plan gratuito
+      matrix:
+        video: ${{ fromJSON(needs.listar.outputs.videos) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,15 +68,11 @@ jobs:
       - name: Comprobar ffmpeg
         run: ffmpeg -hide_banner -filters | grep -q libvmaf && ffmpeg -version | head -1
 
-      - name: Optimizar
+      - name: Optimizar ${{ matrix.video.name }}
         env:
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          MODO: ${{ github.event_name == 'schedule' && vars.MODO_NOCTURNO || inputs.modo }}
-          LIMITE: ${{ inputs.limite || '0' }}
+          VIDEO_ID: ${{ matrix.video.id }}
         run: |
-          FLAGS="--max-minutes 300 --limit ${LIMITE} --summary $GITHUB_STEP_SUMMARY"
+          FLAGS="--id $VIDEO_ID --summary $GITHUB_STEP_SUMMARY"
           if [ "$MODO" = "sustituir" ]; then FLAGS="$FLAGS --apply"; fi
           python3 optimizer.py $FLAGS
 
@@ -50,6 +80,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: informe
+          name: informe-${{ matrix.video.id }}
           path: informe.json
           if-no-files-found: ignore

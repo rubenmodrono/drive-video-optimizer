@@ -299,6 +299,9 @@ def main():
     ap.add_argument("--max-minutes", type=float, default=0,
                     help="no empezar vídeos nuevos pasado este tiempo")
     ap.add_argument("--summary", help="archivo Markdown donde escribir el resumen")
+    ap.add_argument("--id", help="procesar solo el archivo de Drive con este id")
+    ap.add_argument("--list-json", help="no procesar: escribir en este archivo la lista "
+                    "de vídeos pendientes como JSON (para lanzar un trabajo por vídeo)")
     args = ap.parse_args()
 
     drive = Drive()
@@ -308,9 +311,16 @@ def main():
               if (f.get("appProperties") or {}).get(MARK) != "1"]
     if args.only:
         videos = [f for f in videos if f["name"] in args.only]
+    if args.id:
+        videos = [f for f in videos if f["id"] == args.id]
     videos.sort(key=lambda f: -int(f.get("size", 0)))  # los más grandes primero
     if args.limit:
         videos = videos[:args.limit]
+    if args.list_json:
+        with open(args.list_json, "w") as out:
+            json.dump([dict(id=f["id"], name=f["name"]) for f in videos], out, ensure_ascii=False)
+        log(f"{len(videos)} vídeos pendientes.")
+        return
     log(f"{len(videos)} vídeos pendientes. Modo: {'SUSTITUIR' if args.apply else 'simulación'}")
 
     results, start = [], time.time()
@@ -333,7 +343,7 @@ def main():
     log("Terminado. " + msg)
     if args.summary:
         with open(args.summary, "a") as s:
-            s.write(f"## Drive Video Optimizer\n\n{msg}\n\n| Vídeo | Estado | Antes | Después | Calidad |\n|---|---|---|---|---|\n")
+            s.write(f"## {', '.join(r['name'] for r in results) or 'Drive Video Optimizer'}\n\n{msg}\n\n| Vídeo | Estado | Antes | Después | Calidad |\n|---|---|---|---|---|\n")
             for r in results:
                 s.write(f"| {r['name']} | {r.get('status')} {'; '.join(r.get('problems', [])) or r.get('reason', '')} | "
                         f"{r.get('original', 0)/1e6:.0f} MB | {r.get('size', 0)/1e6:.0f} MB | "
