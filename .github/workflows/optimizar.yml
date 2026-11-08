@@ -1,0 +1,55 @@
+name: Optimizar vídeos de Drive
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # cada noche a las 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "simulacion o sustituir"
+        default: simulacion
+        type: choice
+        options: [simulacion, sustituir]
+      limite:
+        description: "Máximo de vídeos (0 = todos)"
+        default: "0"
+
+concurrency:
+  group: optimizer
+  cancel-in-progress: false
+
+jobs:
+  optimizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar ffmpeg con VMAF
+        run: |
+          curl -sSL -o ff.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
+          tar xf ff.tar.xz
+          echo "$PWD/$(ls -d ffmpeg-*/ | head -1)bin" >> "$GITHUB_PATH"
+
+      - name: Comprobar ffmpeg
+        run: ffmpeg -hide_banner -filters | grep -q libvmaf && ffmpeg -version | head -1
+
+      - name: Optimizar
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          MODO: ${{ github.event_name == 'schedule' && vars.MODO_NOCTURNO || inputs.modo }}
+          LIMITE: ${{ inputs.limite || '0' }}
+        run: |
+          FLAGS="--max-minutes 300 --limit ${LIMITE} --summary $GITHUB_STEP_SUMMARY"
+          if [ "$MODO" = "sustituir" ]; then FLAGS="$FLAGS --apply"; fi
+          python3 optimizer.py $FLAGS
+
+      - name: Guardar informe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe
+          path: informe.json
+          if-no-files-found: ignore
