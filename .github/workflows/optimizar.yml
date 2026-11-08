@@ -27,7 +27,7 @@ jobs:
 
       - name: Instalar ffmpeg con VMAF
         run: |
-          curl -sSL -o ff.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-linux64-gpl-7.1.tar.xz
+          curl -fsSL -o ff.tar.xz https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
           tar xf ff.tar.xz
           echo "$PWD/$(ls -d ffmpeg-*/ | head -1)bin" >> "$GITHUB_PATH"
 
