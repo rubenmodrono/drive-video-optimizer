@@ -27,6 +27,7 @@ import urllib.request
 API = "https://www.googleapis.com/drive/v3"
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 MARK = "dvo_optimized"          # appProperty puesta en los archivos ya optimizados
+REJECTED = "dvo_rejected"       # appProperty de originales rechazados (valor: su tamaño)
 
 # Ajustes de compresión
 # Escalera de bitrates (Mbps): se empieza por el más bajo y, si la calidad no
@@ -115,6 +116,9 @@ class Drive:
             h = dict(self._auth(), **{"Content-Type": "video/mp4", "Content-Length": str(size)})
             resp = urllib.request.urlopen(urllib.request.Request(loc, f, h, method="PUT"))
             return json.load(resp)
+
+    def mark(self, fid, props):
+        self.req("PATCH", f"{API}/files/{fid}?fields=id", {"appProperties": props})
 
     def delete_forever(self, fid):
         self.req("DELETE", f"{API}/files/{fid}")
@@ -262,6 +266,8 @@ def process(drive, f, args, workdir):
     res.update(name=name, original=size, seconds=round(time.time() - t0), intentos=tried)
     if not res["ok"]:
         res["status"] = "rechazado"
+        if args.apply:  # no volver a intentarlo cada noche mientras no cambie
+            drive.mark(f["id"], {REJECTED: str(size)})
         return res
     if not args.apply:
         res["status"] = "simulado"
@@ -313,6 +319,10 @@ def main():
     hechos = {os.path.splitext(f["name"])[0].lower() for f in todos
               if (f.get("appProperties") or {}).get(MARK) == "1"}
     videos = [f for f in todos if (f.get("appProperties") or {}).get(MARK) != "1"]
+    rech = [f for f in videos if (f.get("appProperties") or {}).get(REJECTED) == f.get("size")]
+    if rech:
+        log("Rechazados antes, no se reintentan: " + ", ".join(f["name"] for f in rech))
+    videos = [f for f in videos if f not in rech]
     # Control de duplicados: un original que se vuelve a subir después de
     # haberlo optimizado (mismo nombre y mismo tamaño que el original que se
     # sustituyó) se borra en modo sustituir, y nunca se vuelve a procesar.
