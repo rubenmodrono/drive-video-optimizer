@@ -80,6 +80,7 @@ jobs:
 
       - name: Guardar informe
         if: always()
+        continue-on-error: true   # un fallo al guardar el informe no invalida el vídeo
         uses: actions/upload-artifact@v4
         with:
           name: informe-${{ matrix.video.id }}
