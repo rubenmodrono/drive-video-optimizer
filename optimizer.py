@@ -286,6 +286,8 @@ def process(drive, f, args, workdir):
     drive.delete_forever(f["id"])
     log(f"✓ {name}: subido {up['id']} y original borrado")
     res["status"] = "sustituido"
+    res["drive_id"] = up["id"]
+    res["enlace"] = f"https://drive.google.com/file/d/{up['id']}/view"
     return res
 
 

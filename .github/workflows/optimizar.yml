@@ -110,13 +110,13 @@ jobs:
           otros = [f"{r['name']} ({r.get('status')})" for r in rs if r.get("status") != "sustituido"]
           gb = sum(r["original"] - r["size"] for r in ok) / 1e9
           msg = f"{len(ok)} vídeos nuevos listos en Drive ({gb:.2f} GB liberados)."
-          if ok:
-              msg += "\nListos: " + ", ".join(os.path.splitext(r["name"])[0] + ".mp4" for r in ok)
+          for r in ok:
+              msg += f"\n- {os.path.splitext(r['name'])[0]}.mp4: {r.get('enlace', '')}"
           if otros:
               msg += "\nSin sustituir: " + ", ".join(otros)
           req = urllib.request.Request("https://ntfy.sh/" + os.environ["NTFY_TOPIC"], data=msg.encode(),
                                        headers={"Title": "Contenido nuevo para redes", "Click": os.environ["RUN_URL"],
-                                                "Tags": "movie_camera"})
+                                                "Tags": "movie_camera,contenido-nuevo"})
           urllib.request.urlopen(req)
           print(msg)
           PY
