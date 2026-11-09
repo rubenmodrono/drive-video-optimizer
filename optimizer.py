@@ -191,28 +191,50 @@ def encode(src, dst, vi, workdir, mbps):
          "-movflags", "+faststart+use_metadata_tags", dst])
 
 
-def frame_score(src, dst, t, w, h, vmaf):
-    """Compara un fotograma del original (reescalado) con el del comprimido."""
+def _grab(path, t, vf):
+    return subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-i", path, "-frames:v", "1",
+                           "-vf", vf, "-f", "rawvideo", "-"], capture_output=True).stdout
+
+
+def _compare(ra, rb, w, h, flt):
     pix = "yuv420p10le"
-    a = ["-ss", f"{t:.3f}", "-i", src, "-frames:v", "1",
-         "-vf", f"scale={w}:{h}:flags=lanczos,format={pix}", "-f", "rawvideo", "-"]
-    b = ["-ss", f"{t:.3f}", "-i", dst, "-frames:v", "1",
-         "-vf", f"format={pix}", "-f", "rawvideo", "-"]
-    ra = subprocess.run(["ffmpeg", "-v", "error", *a], capture_output=True).stdout
-    rb = subprocess.run(["ffmpeg", "-v", "error", *b], capture_output=True).stdout
-    if not ra or len(ra) != len(rb):
-        return None
     with tempfile.TemporaryDirectory() as d:
         pa, pb = os.path.join(d, "a.yuv"), os.path.join(d, "b.yuv")
         open(pa, "wb").write(ra)
         open(pb, "wb").write(rb)
         raw = ["-f", "rawvideo", "-pix_fmt", pix, "-s", f"{w}x{h}"]
-        flt = "libvmaf" if vmaf else "ssim"
         out = run(["ffmpeg", "-hide_banner", *raw, "-i", pb, *raw, "-i", pa,
                    "-lavfi", flt, "-f", "null", "-"])
-    if vmaf:
+    if flt == "libvmaf":
         return float(out.rsplit("VMAF score:", 1)[1].split()[0])
     return float(out.rsplit("All:", 1)[1].split()[0])
+
+
+def frame_score(src, dst, t, w, h, vmaf, fps=30.0):
+    """Compara un fotograma del original (reescalado) con el del comprimido.
+
+    Al buscar por tiempo, el comprimido puede quedar desplazado un fotograma
+    respecto al original (pasa con algunos vídeos del iPhone). En escenas con
+    mucho movimiento o luces de discoteca eso hunde la nota aunque la calidad
+    sea buena, así que se prueban los fotogramas vecinos (±2) y se puntúa el
+    que mejor encaja."""
+    pix = "yuv420p10le"
+    ra = _grab(src, t, f"scale={w}:{h}:flags=lanczos,format={pix}")
+    if not ra:
+        return None
+    best, best_rb = -1.0, None
+    for k in (0, -1, 1, -2, 2):
+        rb = _grab(dst, max(0.0, t + k / fps), f"format={pix}")
+        if len(rb) != len(ra):
+            continue
+        s = _compare(ra, rb, w, h, "ssim")
+        if s > best:
+            best, best_rb = s, rb
+        if s >= 0.995:
+            break
+    if best_rb is None:
+        return None
+    return _compare(ra, best_rb, w, h, "libvmaf") if vmaf else best
 
 
 def verify(src, dst, vi_src, orig_size):
@@ -231,7 +253,13 @@ def verify(src, dst, vi_src, orig_size):
     vmaf = has_vmaf()
     d = vi_src["duration"]
     times = [d * f for f in (0.1, 0.3, 0.5, 0.7, 0.9)]
-    scores = [s for s in (frame_score(src, dst, t, vi["w"], vi["h"], vmaf) for t in times)
+    try:
+        num, den = vi_src["fps"].split("/")
+        fps = int(num) / int(den) or 30.0
+    except Exception:
+        fps = 30.0
+    fps = min(fps, 60.0) if fps > 1 else 30.0
+    scores = [s for s in (frame_score(src, dst, t, vi["w"], vi["h"], vmaf, fps) for t in times)
               if s is not None]
     metric = "VMAF" if vmaf else "SSIM"
     limit = MIN_VMAF if vmaf else MIN_SSIM
